@@ -1,0 +1,66 @@
+# .buildkite/pipeline.yml
+# Triggered on PR and push to main
+# Validates policies, runs lint, dry-run scans
+
+env:
+  VSPHERE_SERVER: "${VSPHERE_SERVER}"
+  VSPHERE_USER: "${VSPHERE_USER}"
+  VSPHERE_PASSWORD: "${VSPHERE_PASSWORD}"
+
+steps:
+  # ─── Validate & Lint ────────────────────────────────────────────────
+  - group: ":mag: Validate"
+    steps:
+      - label: ":white_check_mark: Validate policy bundles"
+        key: validate-policies
+        command: .buildkite/scripts/validate-policies.sh
+        agents:
+          queue: "vsphere-ops"
+
+      - label: ":white_check_mark: Validate query packs"
+        key: validate-queries
+        command: .buildkite/scripts/validate-queries.sh
+        agents:
+          queue: "vsphere-ops"
+
+      - label: ":lock: GitGuardian secret scan"
+        key: secret-scan
+        plugins:
+          - docker#v5.11.0:
+              image: "gitguardian/ggshield:latest"
+              command: ["ggshield", "secret", "scan", "ci"]
+              environment:
+                - "GITGUARDIAN_API_KEY"
+
+  - wait
+
+  # ─── Dry-Run Scans ─────────────────────────────────────────────────
+  - group: ":test_tube: Dry-Run Scans"
+    steps:
+      - label: ":shield: cnspec scan (dry-run)"
+        key: cnspec-dryrun
+        command: .buildkite/scripts/cnspec-scan.sh --dry-run
+        agents:
+          queue: "vsphere-ops"
+        artifact_paths:
+          - "reports/cnspec-dryrun-*.json"
+
+      - label: ":mag_right: cnquery inventory (dry-run)"
+        key: cnquery-dryrun
+        command: .buildkite/scripts/cnquery-inventory.sh --dry-run
+        agents:
+          queue: "vsphere-ops"
+        artifact_paths:
+          - "reports/cnquery-dryrun-*.json"
+
+  - wait
+
+  # ─── Gate for main ──────────────────────────────────────────────────
+  - label: ":rocket: Promote to scheduled scans"
+    key: promote
+    if: build.branch == "main"
+    command: |
+      echo "Policies validated and dry-run passed."
+      echo "Scheduled pipeline will use these policies on next cron run."
+    agents:
+      queue: "vsphere-ops"
